@@ -1,0 +1,14 @@
+venv/
+.git/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+
+# Не включаем медиа — они живут в named volume
+admin_panel/media/
+
+# Локальная БД и временные файлы
+*.sqlite3
+*.log
