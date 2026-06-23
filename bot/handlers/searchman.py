@@ -235,8 +235,8 @@ async def handle_product_characteristics(message: Message, state: FSMContext):
     await state.update_data(product_characteristics=message.text.strip())
     await message.answer(
         '📦 <b>Комплектация товара</b>\n\n'
-        'Что входит в комплект? (например: товар + инструкция + зарядка).\n'
-        '💡 Если нет дополнений — напишите <b>Нету</b>.',
+        'ТУТ ПИШИТЕ ЦЕНУ ТОЖЕ, ЕСЛИ ЦЕН НА КАЖДЫЙ РАЗМЕР НЕСКОЛЬКО - ПИШИТЕ ВСЕ ЦЕНЫ!\n'
+        'Затем - что входит в комплект? (например: товар + инструкция + зарядка).\n',
         parse_mode='HTML',
     )
     await state.set_state(SearchmanStates.product_packaging)
