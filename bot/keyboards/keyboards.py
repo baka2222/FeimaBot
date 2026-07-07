@@ -4,10 +4,20 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from bot.locales import t, BTN_ADD_PRODUCT
 
-def contact_keyboard() -> ReplyKeyboardMarkup:
+
+def language_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text='🇷🇺 Русский', callback_data='lang_ru'),
+        InlineKeyboardButton(text='🇨🇳 中文', callback_data='lang_zh'),
+    ]])
+
+
+def contact_keyboard(lang: str = 'ru') -> ReplyKeyboardMarkup:
+    text = '📱 Поделиться номером' if lang == 'ru' else '📱 分享号码'
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text='📱 Поделиться номером', request_contact=True)]],
+        keyboard=[[KeyboardButton(text=text, request_contact=True)]],
         resize_keyboard=True,
         one_time_keyboard=True,
     )
@@ -17,14 +27,14 @@ def remove_keyboard() -> ReplyKeyboardRemove:
     return ReplyKeyboardRemove()
 
 
-def searchman_menu() -> ReplyKeyboardMarkup:
+def searchman_menu(lang: str = 'ru') -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text='📦 Добавить товар')]],
+        keyboard=[[KeyboardButton(text=BTN_ADD_PRODUCT.get(lang, BTN_ADD_PRODUCT['ru']))]],
         resize_keyboard=True,
     )
 
 
-def stores_keyboard(stores: list, page: int = 0, per_page: int = 8) -> InlineKeyboardMarkup:
+def stores_keyboard(stores: list, page: int = 0, per_page: int = 8, lang: str = 'ru') -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
     start = page * per_page
@@ -45,20 +55,28 @@ def stores_keyboard(stores: list, page: int = 0, per_page: int = 8) -> InlineKey
         builder.row(*nav)
 
     builder.row(
-        InlineKeyboardButton(text='🔍 Поиск', callback_data='store_search'),
-        InlineKeyboardButton(text='➕ Новый магазин', callback_data='store_new'),
+        InlineKeyboardButton(text=t(lang, 'btn_search'), callback_data='store_search'),
+        InlineKeyboardButton(text=t(lang, 'btn_new_store'), callback_data='store_new'),
     )
 
     return builder.as_markup()
 
 
-def images_done_keyboard(count: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=f'✅ Готово — {count} фото', callback_data='images_done')]]
-    )
+def images_done_keyboard(count: int, lang: str = 'ru') -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=t(lang, 'btn_done_photos', count=count), callback_data='images_done')
+    ]])
 
 
 def take_product_keyboard(product_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text='✅ Взять', callback_data=f'take_{product_id}')]]
-    )
+    """Кнопка для группы ИИ-создателей (всегда по-русски)."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text='✅ Взять', callback_data=f'take_{product_id}')
+    ]])
+
+
+def upload_product_keyboard(product_id: int) -> InlineKeyboardMarkup:
+    """Кнопка для группы загрузчиков (всегда по-русски)."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text='📥 Загрузить в панель', callback_data=f'upload_{product_id}')
+    ]])

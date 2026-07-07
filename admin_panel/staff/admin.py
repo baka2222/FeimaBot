@@ -3,6 +3,7 @@ import re
 from django.contrib import admin
 from django.db.models import Count
 from django.http import HttpResponse
+from django.utils import timezone
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from openpyxl import Workbook
@@ -203,6 +204,148 @@ def export_bonuses(modeladmin, request, queryset):
 export_bonuses.short_description = '💰 Экспорт премий'
 
 
+def export_daily_stats(modeladmin, request, queryset):  # noqa: ARG001
+    """Кто сколько сделал за ТЕКУЩИЙ день: найдено / сделано ИИ / загружено."""
+    today = timezone.localdate()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'За день'
+
+    blue_fill = PatternFill('solid', fgColor='2E86AB')
+    gray_fill = PatternFill('solid', fgColor='D9D9D9')
+    thin = Side(style='thin', color='AAAAAA')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def _style(cell, fill=None, bold=False, align='left', color='000000'):
+        cell.font = Font(bold=bold, color=color)
+        cell.alignment = Alignment(horizontal=align, vertical='center', wrap_text=True)
+        cell.border = border
+        if fill:
+            cell.fill = fill
+
+    ws.append([f'Статистика за {today.strftime("%d.%m.%Y")}'])
+    ws.merge_cells('A1:E1')
+    _style(ws.cell(1, 1), bold=True, align='center')
+
+    headers = ['Сотрудник', 'Роль', 'Найдено (товаров)', 'Сделано (товаров)', 'Загружено (товаров)']
+    ws.append(headers)
+    for col_idx in range(1, len(headers) + 1):
+        _style(ws.cell(2, col_idx), fill=blue_fill, bold=True, align='center', color='FFFFFF')
+
+    ws.column_dimensions['A'].width = 22
+    ws.column_dimensions['B'].width = 28
+    ws.column_dimensions['C'].width = 16
+    ws.column_dimensions['D'].width = 18
+    ws.column_dimensions['E'].width = 18
+
+    total_found = total_made = total_uploaded = 0
+
+    for staff in queryset.order_by('role', 'name'):
+        # Найдено — товары, созданные поисковиком сегодня
+        found = Product.objects.filter(creator=staff, created_at__date=today).count()
+        # Сделано — РАЗНЫЕ товары, для которых ИИ-креатор сделал фото сегодня
+        # (премия за товар, а не за количество фото: 3 фото или 2 = 1 товар)
+        made = (
+            Product.objects
+            .filter(aiimage__creator=staff, aiimage__created_at__date=today)
+            .distinct()
+            .count()
+        )
+        # Загружено — товары, загруженные в панель сегодня
+        uploaded = Product.objects.filter(uploader=staff, uploaded_at__date=today).count()
+
+        # Пропускаем тех, кто сегодня ничего не делал
+        if not (found or made or uploaded):
+            continue
+
+        total_found += found
+        total_made += made
+        total_uploaded += uploaded
+
+        ws.append([staff.name, staff.get_role_display(), found, made, uploaded])
+        r = ws.max_row
+        for c in range(1, 6):
+            _style(ws.cell(r, c), align='center' if c >= 3 else 'left')
+
+    ws.append(['ИТОГО', '', total_found, total_made, total_uploaded])
+    r = ws.max_row
+    for c in range(1, 6):
+        _style(ws.cell(r, c), fill=gray_fill, bold=True, align='center' if c >= 3 else 'left')
+
+    response = HttpResponse(
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response['Content-Disposition'] = f'attachment; filename=stats_{today.isoformat()}.xlsx'
+    wb.save(response)
+    return response
+
+export_daily_stats.short_description = '📊 Статистика за сегодня (найдено/сделано/загружено)'
+
+
+class _StaffFkFilter(admin.SimpleListFilter):
+    """База: список сотрудников, реально имеющих связанные записи, + фильтр по FK.
+
+    Список формируется по фактическим данным (кто создавал товары / ИИ-фото),
+    а не по роли — так фильтр всегда виден, когда есть что показывать, и
+    отражает именно тех, у кого есть товары.
+    """
+    field_path = None    # путь фильтрации в queryset
+    distinct = False     # True для обратных связей (один товар — много ИИ-фото)
+
+    def staff_queryset(self):
+        raise NotImplementedError
+
+    def lookups(self, request, model_admin):
+        return [(s.id, s.name) for s in self.staff_queryset().order_by('name')]
+
+    def queryset(self, request, queryset):
+        if self.value():
+            qs = queryset.filter(**{self.field_path: self.value()})
+            return qs.distinct() if self.distinct else qs
+        return queryset
+
+
+# ── Фильтры для ТОВАРОВ (количество Product) ──
+class ProductSearchmanFilter(_StaffFkFilter):
+    title = 'Поисковик'
+    parameter_name = 'searchman'
+    field_path = 'creator_id'
+
+    def staff_queryset(self):
+        return Staff.objects.filter(found_products__isnull=False).distinct()
+
+
+class AiCreatorFilter(_StaffFkFilter):
+    """Фильтр товаров по ИИ-креатору — считает именно товары, не фото."""
+    title = 'ИИ-креатор'
+    parameter_name = 'ai_creator'
+    field_path = 'aiimage__creator_id'
+    distinct = True
+
+    def staff_queryset(self):
+        return Staff.objects.filter(aiimage__isnull=False).distinct()
+
+
+# ── Фильтры для ИИ-ИЗОБРАЖЕНИЙ ──
+class AiImageAiCreatorFilter(_StaffFkFilter):
+    title = 'ИИ-креатор'
+    parameter_name = 'ai_creator'
+    field_path = 'creator_id'
+
+    def staff_queryset(self):
+        return Staff.objects.filter(aiimage__isnull=False).distinct()
+
+
+class AiImageSearchmanFilter(_StaffFkFilter):
+    title = 'Поисковик'
+    parameter_name = 'searchman'
+    field_path = 'product__creator_id'
+
+    def staff_queryset(self):
+        return Staff.objects.filter(found_products__aiimage__isnull=False).distinct()
+
+
 class ProductImageInline(admin.TabularInline):
     """Фото товара (M2M) — просмотр и удаление отдельных фото."""
     model = Product.images.through
@@ -332,19 +475,19 @@ class StoreAdmin(admin.ModelAdmin):
 
 @admin.register(Staff)
 class StaffAdmin(admin.ModelAdmin):
-    list_display = ('name', 'phone', 'role', 'registred', 'tg_id', 'created_at')
+    list_display = ('name', 'phone', 'role', 'lang', 'registred', 'tg_id', 'created_at')
     list_display_links = ('name',)
     list_editable = ('registred',)
-    list_filter = ('role', 'registred', ('created_at', admin.DateFieldListFilter))
+    list_filter = ('role', 'lang', 'registred', ('created_at', admin.DateFieldListFilter))
     search_fields = ('name', 'phone', 'tg_id')
     inlines = [ProductInlineForStaff, AiImageInlineForStaff]
-    actions = [export_to_excel, export_bonuses]
+    actions = [export_daily_stats, export_bonuses, export_to_excel]
     list_per_page = 25
     date_hierarchy = 'created_at'
     readonly_fields = ('created_at', 'updated_at')
 
     fieldsets = (
-        (None, {'fields': ('name', 'phone', 'role')}),
+        (None, {'fields': ('name', 'phone', 'role', 'lang')}),
         ('Дополнительно', {
             'classes': ('collapse',),
             'fields': ('age', 'tg_id', 'registred'),
@@ -377,8 +520,13 @@ class ImageAdmin(admin.ModelAdmin):
 class AiImageAdmin(admin.ModelAdmin):
     list_display = ('preview', 'creator_link', 'product_link', 'created_at')
     list_display_links = ('preview',)
-    list_filter = ('creator', 'product', ('created_at', admin.DateFieldListFilter))
-    search_fields = ('creator__name', 'creator__phone', 'product__name')
+    list_filter = (
+        AiImageAiCreatorFilter,
+        AiImageSearchmanFilter,
+        ('created_at', admin.DateFieldListFilter),
+    )
+    search_fields = ('creator__name', 'creator__phone', 'product__name',
+                     'product__creator__name')
     readonly_fields = ('preview', 'created_at', 'updated_at')
     raw_id_fields = ('creator', 'product')
     actions = [export_to_excel]
@@ -415,22 +563,31 @@ class AiImageAdmin(admin.ModelAdmin):
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
     list_display = (
-        'name', 'store_link', 'creator_link',
-        'main_image_preview', 'images_count', 'created_at',
+        'name', 'price', 'store_link', 'creator_link', 'uploader_link',
+        'main_image_preview', 'images_count', 'created_at', 'uploaded_at',
     )
     list_display_links = ('name',)
-    list_filter = ('store', 'creator', ('created_at', admin.DateFieldListFilter))
-    search_fields = ('name', 'store__name', 'creator__name', 'characteristics')
+    list_filter = (
+        ProductSearchmanFilter,
+        AiCreatorFilter,
+        'uploader',
+        'store',
+        ('created_at', admin.DateFieldListFilter),
+        ('uploaded_at', admin.DateFieldListFilter),
+    )
+    search_fields = ('name', 'price', 'store__name', 'creator__name',
+                     'uploader__name', 'characteristics')
     readonly_fields = ('main_image_preview', 'images_gallery', 'created_at', 'updated_at')
     inlines = [ProductImageInline, AiImageInlineForProduct]
     actions = [export_to_excel]
     save_on_top = True
     list_per_page = 25
     date_hierarchy = 'created_at'
-    raw_id_fields = ('store', 'creator', 'main_image')
+    raw_id_fields = ('store', 'creator', 'main_image', 'uploader')
 
     fieldsets = (
-        ('Основное', {'fields': ('name', 'store', 'creator')}),
+        ('Основное', {'fields': ('name', 'price', 'store', 'creator')}),
+        ('Загрузка в панель', {'fields': ('uploader', 'uploaded_at')}),
         ('Изображения', {
             'fields': ('main_image', 'main_image_preview', 'images_gallery'),
             'description': 'Доп. фото управляются ниже через секцию «Фото товара».',
@@ -441,9 +598,12 @@ class ProductAdmin(admin.ModelAdmin):
         ('Даты', {'classes': ('collapse',), 'fields': ('created_at', 'updated_at')}),
     )
 
+    def get_readonly_fields(self, request, obj=None):
+        return self.readonly_fields + ('uploaded_at',)
+
     def get_queryset(self, request):
         return super().get_queryset(request).select_related(
-            'store', 'creator', 'main_image',
+            'store', 'creator', 'uploader', 'main_image',
         ).prefetch_related('images')
 
     @admin.display(description='Магазин')
@@ -458,6 +618,15 @@ class ProductAdmin(admin.ModelAdmin):
         return format_html(
             '<a href="/admin/staff/staff/{}/change/">{}</a>',
             obj.creator_id, obj.creator.name,
+        )
+
+    @admin.display(description='Загрузчик')
+    def uploader_link(self, obj):
+        if not obj.uploader_id:
+            return '—'
+        return format_html(
+            '<a href="/admin/staff/staff/{}/change/">{}</a>',
+            obj.uploader_id, obj.uploader.name,
         )
 
     @admin.display(description='Главное фото')

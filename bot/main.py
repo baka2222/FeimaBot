@@ -5,7 +5,7 @@ from aiogram import Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from bot.bot import bot
-from bot.handlers import auth, searchman, ai_creator
+from bot.handlers import auth, searchman, ai_creator, uploader
 
 logging.basicConfig(level=logging.INFO)
 
@@ -17,6 +17,7 @@ async def main():
     dp.include_router(auth.router)
     dp.include_router(searchman.router)
     dp.include_router(ai_creator.router)
+    dp.include_router(uploader.router)
 
     await dp.start_polling(bot, skip_updates=True)
 

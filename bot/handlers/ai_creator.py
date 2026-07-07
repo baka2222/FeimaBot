@@ -12,12 +12,16 @@ from aiogram.utils.text_decorations import html_decoration
 from sqlalchemy import select
 
 from bot.database.connection import session_maker
-from bot.database.models import AiImage, Image, Product, Staff, product_images_table
+from bot.database.models import AiImage, Image, Product, Staff, Store, product_images_table
+from bot.keyboards.keyboards import upload_product_keyboard
+from bot.locales import t
 from bot.states.states import AiCreatorStates
 
 router = Router()
 
 MEDIA_ROOT = os.getenv('MEDIA_ROOT', 'admin_panel/media')
+GROUP_ID = os.getenv('GROUP_ID')                     # группа ИИ-создателей
+UPLOADER_GROUP_ID = os.getenv('UPLOADER_GROUP_ID')   # группа загрузчиков
 
 
 @router.callback_query(F.data.startswith('take_'))
@@ -26,85 +30,78 @@ async def handle_take_product(callback: CallbackQuery, state: FSMContext):
     tg_id = callback.from_user.id
 
     async with session_maker() as session:
-        staff_res = await session.execute(select(Staff).where(Staff.tg_id == tg_id))
-        staff = staff_res.scalar_one_or_none()
+        staff = (await session.execute(
+            select(Staff).where(Staff.tg_id == tg_id)
+        )).scalar_one_or_none()
 
         if not staff:
-            await callback.answer(
-                '❌ Вы не найдены в системе. Сначала войдите в бота через /start.',
-                show_alert=True,
-            )
+            await callback.answer(t('ru', 'take_not_found'), show_alert=True)
             return
+
+        lang = staff.lang or 'ru'
 
         if staff.role != 'ai_creator':
-            await callback.answer(
-                '❌ Только ИИ-создатели могут брать задания.',
-                show_alert=True,
-            )
+            await callback.answer(t(lang, 'take_not_ai'), show_alert=True)
             return
 
-        existing_res = await session.execute(
+        existing = (await session.execute(
             select(AiImage).where(AiImage.product_id == product_id).limit(1)
-        )
-        if existing_res.scalar_one_or_none():
-            await callback.answer('❌ Этот товар уже взят другим ИИ-создателем.', show_alert=True)
+        )).scalar_one_or_none()
+        if existing:
+            await callback.answer(t(lang, 'take_already'), show_alert=True)
             return
 
-        prod_res = await session.execute(select(Product).where(Product.id == product_id))
-        product = prod_res.scalar_one()
+        product = (await session.execute(
+            select(Product).where(Product.id == product_id)
+        )).scalar_one()
 
-        # Главное фото
-        main_img_res = await session.execute(
+        main_img = (await session.execute(
             select(Image).where(Image.id == product.main_image_id)
-        )
-        main_img = main_img_res.scalar_one_or_none()
+        )).scalar_one_or_none()
 
-        # Доп. фото товара (M2M)
-        add_imgs_res = await session.execute(
+        additional_imgs = list((await session.execute(
             select(Image)
             .join(product_images_table, Image.id == product_images_table.c.image_id)
             .where(product_images_table.c.product_id == product_id)
-        )
-        additional_imgs = list(add_imgs_res.scalars().all())
+        )).scalars().all())
 
         product_name = product.name
         staff_id = staff.id
-        staff_name = staff.name
 
-    # Редактируем сообщение в группе: добавляем хэштег, убираем кнопку
-    hashtag = '#' + staff_name.replace(' ', '_')
+    # Редактируем сообщение в группе ИИ-креаторов: убираем кнопку, помечаем взятым
+    hashtag = '#' + staff.name.replace(' ', '_')
     try:
         original = html_decoration.unparse(
             callback.message.caption or '',
             callback.message.caption_entities or [],
         )
         await callback.message.edit_caption(
-            caption=f'{original}\n\n{hashtag}',
+            caption=f'{original}\n\n🎨 Взял: {hashtag}',
             reply_markup=None,
             parse_mode='HTML',
         )
     except Exception:
-        pass  # сообщение могло быть уже изменено
+        pass
 
-    await callback.answer('✅ Задание взято!')
+    await callback.answer(t(lang, 'take_taken'))
 
-    # Устанавливаем FSM-состояние для личного чата ИИ-создателя
+    # Устанавливаем FSM-состояние для лички ИИ-креатора
     private_key = StorageKey(bot_id=callback.bot.id, chat_id=tg_id, user_id=tg_id)
     await state.storage.set_state(private_key, AiCreatorStates.wait_photos)
-    await state.storage.set_data(private_key, {'product_id': product_id, 'staff_id': staff_id})
+    await state.storage.set_data(private_key, {
+        'product_id': product_id, 'staff_id': staff_id, 'lang': lang,
+    })
 
     try:
-        # Сначала отправляем альбом фото товара
         media_root = Path(MEDIA_ROOT)
         media: list[InputMediaPhoto] = []
+        caption = t(lang, 'ai_product_photos', name=product_name)
 
         if main_img:
             main_path = media_root / main_img.image
             if main_path.exists():
                 media.append(InputMediaPhoto(
-                    media=FSInputFile(str(main_path)),
-                    caption=f'📦 <b>{product_name}</b>\n\nФото товара для ИИ-обработки:',
-                    parse_mode='HTML',
+                    media=FSInputFile(str(main_path)), caption=caption, parse_mode='HTML',
                 ))
 
         for img in additional_imgs:
@@ -114,32 +111,26 @@ async def handle_take_product(callback: CallbackQuery, state: FSMContext):
 
         if len(media) > 1:
             await callback.bot.send_media_group(chat_id=tg_id, media=media)
-        elif len(media) == 1:
+        elif len(media) == 1 and main_img:
             await callback.bot.send_photo(
                 chat_id=tg_id,
                 photo=FSInputFile(str(media_root / main_img.image)),
-                caption=f'📦 <b>{product_name}</b>\n\nФото товара для ИИ-обработки:',
-                parse_mode='HTML',
+                caption=caption, parse_mode='HTML',
             )
 
-        # Затем инструкция
         await callback.bot.send_message(
             chat_id=tg_id,
-            text=(
-                f'📸 Жду ваши ИИ-фотки!\n\n'
-                f'📦 <b>Товар:</b> {product_name}\n\n'
-                f'Отправляйте готовые фотографии по одной.\n'
-                f'Когда закончите — напишите /done'
-            ),
+            text=t(lang, 'ai_wait_photos', name=product_name),
             parse_mode='HTML',
         )
     except Exception:
-        pass  # ИИ-создатель должен хотя бы раз запустить бота
+        pass  # ИИ-креатор должен хотя бы раз запустить бота
 
 
 @router.message(AiCreatorStates.wait_photos, F.photo, F.chat.type == 'private')
 async def handle_ai_photo(message: Message, state: FSMContext):
     data = await state.get_data()
+    lang = data.get('lang', 'ru')
     photo = message.photo[-1]
     now = datetime.now(timezone.utc)
 
@@ -160,10 +151,98 @@ async def handle_ai_photo(message: Message, state: FSMContext):
         session.add(ai_img)
         await session.commit()
 
-    await message.answer('✅ Фото сохранено! Отправьте ещё или /done для завершения.')
+    await message.answer(t(lang, 'ai_photo_saved'))
 
 
 @router.message(AiCreatorStates.wait_photos, Command('done'), F.chat.type == 'private')
 async def handle_ai_done(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
+    product_id = data['product_id']
+    staff_id = data['staff_id']
+
+    async with session_maker() as session:
+        ai_imgs = list((await session.execute(
+            select(AiImage)
+            .where(AiImage.product_id == product_id, AiImage.creator_id == staff_id)
+            .order_by(AiImage.id)
+        )).scalars().all())
+
+        if not ai_imgs:
+            await message.answer(t(lang, 'ai_done_nothing'))
+            return
+
+        product = (await session.execute(
+            select(Product).where(Product.id == product_id)
+        )).scalar_one()
+        store = (await session.execute(
+            select(Store).where(Store.id == product.store_id)
+        )).scalar_one()
+        creator = (await session.execute(
+            select(Staff).where(Staff.id == product.creator_id)
+        )).scalar_one()
+        ai_creator = (await session.execute(
+            select(Staff).where(Staff.id == staff_id)
+        )).scalar_one()
+
+        product_data = {
+            'name': product.name, 'price': product.price or '—',
+            'store': store.name, 'size': product.size, 'color': product.color,
+            'material': product.material, 'characteristics': product.characteristics,
+            'packaging': product.packaging, 'creator': creator.name,
+            'ai_name': ai_creator.name,
+        }
+        ai_paths = [img.image for img in ai_imgs]
+
     await state.clear()
-    await message.answer('✅ Готово! Все фотки сохранены.\nОжидайте следующего задания в группе.')
+    await message.answer(t(lang, 'ai_done'))
+
+    if not UPLOADER_GROUP_ID:
+        return
+
+    # Подпись в группу загрузчиков — ВСЕГДА на русском
+    caption = (
+        f'🎨 <b>Готов к загрузке в панель!</b>\n\n'
+        f'📦 <b>Название:</b> {product_data["name"]}\n'
+        f'💰 <b>Цена:</b> {product_data["price"]}\n'
+        f'🏪 <b>Магазин:</b> {product_data["store"]}\n'
+        f'📐 <b>Размеры:</b> {product_data["size"]}\n'
+        f'🎨 <b>Цвет:</b> {product_data["color"]}\n'
+        f'🧵 <b>Материал:</b> {product_data["material"]}\n'
+        f'📋 <b>Характеристики:</b> {product_data["characteristics"]}\n'
+        f'📦 <b>Комплектация:</b> {product_data["packaging"]}\n'
+        f'👤 <b>Поисковик:</b> {product_data["creator"]}\n'
+        f'🎨 <b>ИИ-креатор:</b> {product_data["ai_name"]}\n'
+        f'📸 <b>ИИ-фото:</b> {len(ai_paths)} шт.'
+    )
+
+    media_root = Path(MEDIA_ROOT)
+    media: list[InputMediaPhoto] = []
+    for i, rel in enumerate(ai_paths):
+        p = media_root / rel
+        if not p.exists():
+            continue
+        if i == 0:
+            media.append(InputMediaPhoto(
+                media=FSInputFile(str(p)), caption=caption, parse_mode='HTML',
+            ))
+        else:
+            media.append(InputMediaPhoto(media=FSInputFile(str(p))))
+
+    if len(media) > 1:
+        await message.bot.send_media_group(chat_id=int(UPLOADER_GROUP_ID), media=media)
+        # Кнопку нельзя прикрепить к альбому — отдельным сообщением
+        await message.bot.send_message(
+            chat_id=int(UPLOADER_GROUP_ID),
+            text=f'☝️ <b>{product_data["name"]}</b> — заявка на загрузку',
+            reply_markup=upload_product_keyboard(product_id),
+            parse_mode='HTML',
+        )
+    elif len(media) == 1:
+        await message.bot.send_photo(
+            chat_id=int(UPLOADER_GROUP_ID),
+            photo=FSInputFile(str(media_root / ai_paths[0])),
+            caption=caption,
+            reply_markup=upload_product_keyboard(product_id),
+            parse_mode='HTML',
+        )

@@ -22,6 +22,7 @@ class Staff(Base):
     phone: Mapped[int] = mapped_column(BigInteger)
     name: Mapped[str] = mapped_column(String(50))
     role: Mapped[str] = mapped_column(String(50))
+    lang: Mapped[str] = mapped_column(String(5), default='ru')
     age: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     tg_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     registred: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -60,20 +61,26 @@ class Product(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     creator_id: Mapped[int] = mapped_column(BigInteger, ForeignKey('staff_staff.id'))
+    uploader_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey('staff_staff.id'), nullable=True
+    )
     store_id: Mapped[int] = mapped_column(BigInteger, ForeignKey('staff_store.id'))
     main_image_id: Mapped[int] = mapped_column(BigInteger, ForeignKey('staff_image.id'), unique=True)
     name: Mapped[str] = mapped_column(String(100))
+    price: Mapped[str] = mapped_column(String(255), default='')
     size: Mapped[str] = mapped_column(String(100))
     color: Mapped[str] = mapped_column(String(100))
     material: Mapped[str] = mapped_column(String(100))
     characteristics: Mapped[str] = mapped_column(String(100))
     packaging: Mapped[str] = mapped_column(String(100))
+    uploaded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     creator: Mapped['Staff'] = relationship(
         'Staff', back_populates='products', foreign_keys=[creator_id]
     )
+    uploader: Mapped[Optional['Staff']] = relationship('Staff', foreign_keys=[uploader_id])
     store: Mapped['Store'] = relationship('Store', back_populates='products')
     main_image: Mapped['Image'] = relationship('Image', foreign_keys=[main_image_id])
     ai_images: Mapped[List['AiImage']] = relationship('AiImage', back_populates='product')

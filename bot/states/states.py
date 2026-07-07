@@ -2,6 +2,7 @@ from aiogram.fsm.state import StatesGroup, State
 
 
 class AuthStates(StatesGroup):
+    choosing_language = State()
     waiting_contact = State()
 
 
@@ -11,6 +12,7 @@ class SearchmanStates(StatesGroup):
     add_store_name = State()
     add_store_phone = State()
     product_name = State()
+    product_price = State()
     product_size = State()
     product_color = State()
     product_material = State()

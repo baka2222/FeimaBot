@@ -15,6 +15,7 @@ from bot.keyboards.keyboards import (
     stores_keyboard, take_product_keyboard,
     searchman_menu, images_done_keyboard,
 )
+from bot.locales import t, BTN_ADD_PRODUCT
 from bot.states.states import SearchmanStates
 
 router = Router()
@@ -52,21 +53,19 @@ async def _save_photo(bot, photo, subfolder: str) -> str:
 
 # ── Entry point ────────────────────────────────────────────────────────────
 
-@router.message(StateFilter(None), F.text == '📦 Добавить товар')
+@router.message(StateFilter(None), F.text.in_(set(BTN_ADD_PRODUCT.values())))
 async def start_add_product(message: Message, state: FSMContext):
     staff = await _get_searchman(message.from_user.id)
     if not staff:
-        await message.answer('❌ Нет доступа. Войдите через /start.')
+        await message.answer(t('ru', 'no_access'))
         return
 
-    await state.update_data(staff_id=staff.id, staff_name=staff.name)
+    lang = staff.lang or 'ru'
+    await state.update_data(staff_id=staff.id, staff_name=staff.name, lang=lang)
     stores = await _fetch_stores()
     await message.answer(
-        '🏪 <b>Выберите магазин</b>\n\n'
-        '⚠️ Указывайте название магазина максимально точно, '
-        'чтобы его легко было найти в будущем.\n'
-        '🚫 За неверные данные предусмотрен штраф.',
-        reply_markup=stores_keyboard(stores, page=0),
+        t(lang, 'choose_store'),
+        reply_markup=stores_keyboard(stores, page=0, lang=lang),
         parse_mode='HTML',
     )
     await state.set_state(SearchmanStates.select_store)
@@ -76,27 +75,25 @@ async def start_add_product(message: Message, state: FSMContext):
 
 @router.callback_query(SearchmanStates.select_store, F.data.startswith('store_sel_'))
 async def cb_select_store(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
     store_id = int(callback.data.removeprefix('store_sel_'))
     await state.update_data(store_id=store_id)
-    await callback.message.edit_text('✅ Магазин выбран.')
+    await callback.message.edit_text(t(lang, 'store_selected'))
     await callback.answer()
-    await callback.message.answer(
-        '📦 <b>Название товара</b>\n\n'
-        'Введите точное название товара так, как оно написано на упаковке или ценнике.',
-        parse_mode='HTML',
-    )
+    await callback.message.answer(t(lang, 'product_name'), parse_mode='HTML')
     await state.set_state(SearchmanStates.product_name)
 
 
 @router.callback_query(SearchmanStates.select_store, F.data.startswith('stores_pg_'))
 async def cb_stores_page(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
     page = int(callback.data.removeprefix('stores_pg_'))
     stores = await _fetch_stores()
     await callback.message.edit_text(
-        '🏪 <b>Выберите магазин</b>\n\n'
-        '⚠️ Название указывайте точно — по нему потом ищут.\n'
-        '🚫 За неверные данные предусмотрен штраф.',
-        reply_markup=stores_keyboard(stores, page),
+        t(lang, 'choose_store'),
+        reply_markup=stores_keyboard(stores, page, lang=lang),
         parse_mode='HTML',
     )
     await callback.answer()
@@ -104,20 +101,18 @@ async def cb_stores_page(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(SearchmanStates.select_store, F.data == 'store_search')
 async def cb_store_search(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text('🔍 Введите часть названия магазина или имени владельца:')
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
+    await callback.message.edit_text(t(lang, 'store_search_prompt'))
     await state.set_state(SearchmanStates.search_store)
     await callback.answer()
 
 
 @router.callback_query(SearchmanStates.select_store, F.data == 'store_new')
 async def cb_store_new(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text(
-        '🏪 <b>Новый магазин — Название</b>\n\n'
-        'Введите название магазина или имя владельца.\n'
-        '⚠️ Указывайте максимально точно — по этому названию его будут находить в списке.\n'
-        '🚫 За неверные данные предусмотрен штраф.',
-        parse_mode='HTML',
-    )
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
+    await callback.message.edit_text(t(lang, 'new_store_name'), parse_mode='HTML')
     await state.set_state(SearchmanStates.add_store_name)
     await callback.answer()
 
@@ -126,16 +121,20 @@ async def cb_store_new(callback: CallbackQuery, state: FSMContext):
 
 @router.message(SearchmanStates.search_store)
 async def handle_store_search(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
     text = message.text.strip()
     stores = await _fetch_stores(search_text=text)
     if not stores:
         await message.answer(
-            f'❌ Ничего не найдено по запросу «{text}».\n'
-            'Попробуйте другой запрос или добавьте новый магазин:',
-            reply_markup=stores_keyboard([], 0),
+            t(lang, 'store_search_none', text=text),
+            reply_markup=stores_keyboard([], 0, lang=lang),
         )
     else:
-        await message.answer(f'🔍 Результаты по «{text}»:', reply_markup=stores_keyboard(stores, 0))
+        await message.answer(
+            t(lang, 'store_search_results', text=text),
+            reply_markup=stores_keyboard(stores, 0, lang=lang),
+        )
     await state.set_state(SearchmanStates.select_store)
 
 
@@ -143,24 +142,22 @@ async def handle_store_search(message: Message, state: FSMContext):
 
 @router.message(SearchmanStates.add_store_name)
 async def handle_new_store_name(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
     await state.update_data(new_store_name=message.text.strip())
-    await message.answer(
-        '📞 <b>Новый магазин — Телефон</b>\n\n'
-        'Введите номер телефона магазина (только цифры, без пробелов и +).\n'
-        '🚫 За неверные данные предусмотрен штраф.',
-        parse_mode='HTML',
-    )
+    await message.answer(t(lang, 'new_store_phone'), parse_mode='HTML')
     await state.set_state(SearchmanStates.add_store_phone)
 
 
 @router.message(SearchmanStates.add_store_phone)
 async def handle_new_store_phone(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
     phone_str = ''.join(filter(str.isdigit, message.text.strip()))
     if not phone_str:
-        await message.answer('❌ Некорректный номер. Введите только цифры:')
+        await message.answer(t(lang, 'bad_phone'))
         return
 
-    data = await state.get_data()
     now = datetime.now(timezone.utc)
 
     async with session_maker() as session:
@@ -171,12 +168,8 @@ async def handle_new_store_phone(message: Message, state: FSMContext):
         store_id, store_name = store.id, store.name
 
     await state.update_data(store_id=store_id)
-    await message.answer(f'✅ Магазин «{store_name}» добавлен!')
-    await message.answer(
-        '📦 <b>Название товара</b>\n\n'
-        'Введите точное название товара так, как оно написано на упаковке или ценнике.',
-        parse_mode='HTML',
-    )
+    await message.answer(t(lang, 'store_added', name=store_name))
+    await message.answer(t(lang, 'product_name'), parse_mode='HTML')
     await state.set_state(SearchmanStates.product_name)
 
 
@@ -184,73 +177,64 @@ async def handle_new_store_phone(message: Message, state: FSMContext):
 
 @router.message(SearchmanStates.product_name)
 async def handle_product_name(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
     await state.update_data(product_name=message.text.strip())
-    await message.answer(
-        '📐 <b>Размеры товара</b>\n\n'
-        'Укажите размеры (длина × ширина × высота, или S/M/L и т.д.).\n'
-        '💡 Если размеров нет — напишите <b>Нету</b>.',
-        parse_mode='HTML',
-    )
+    await message.answer(t(lang, 'product_price'), parse_mode='HTML')
+    await state.set_state(SearchmanStates.product_price)
+
+
+@router.message(SearchmanStates.product_price)
+async def handle_product_price(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
+    await state.update_data(product_price=message.text.strip())
+    await message.answer(t(lang, 'product_size'), parse_mode='HTML')
     await state.set_state(SearchmanStates.product_size)
 
 
 @router.message(SearchmanStates.product_size)
 async def handle_product_size(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
     await state.update_data(product_size=message.text.strip())
-    await message.answer(
-        '🎨 <b>Цвета товара</b>\n\n'
-        'Перечислите все доступные цвета через запятую.\n'
-        '💡 Если неизвестно — напишите <b>Нету</b>.',
-        parse_mode='HTML',
-    )
+    await message.answer(t(lang, 'product_color'), parse_mode='HTML')
     await state.set_state(SearchmanStates.product_color)
 
 
 @router.message(SearchmanStates.product_color)
 async def handle_product_color(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
     await state.update_data(product_color=message.text.strip())
-    await message.answer(
-        '🧵 <b>Материал товара</b>\n\n'
-        'Укажите из чего сделан товар (хлопок, полиэстер, пластик и т.д.).\n'
-        '💡 Если неизвестно — напишите <b>Нету</b>.',
-        parse_mode='HTML',
-    )
+    await message.answer(t(lang, 'product_material'), parse_mode='HTML')
     await state.set_state(SearchmanStates.product_material)
 
 
 @router.message(SearchmanStates.product_material)
 async def handle_product_material(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
     await state.update_data(product_material=message.text.strip())
-    await message.answer(
-        '📋 <b>Характеристики товара</b>\n\n'
-        'Вес, мощность, страна производителя и т.д.\n'
-        '💡 Если нечего добавить — напишите <b>Нету</b>.',
-        parse_mode='HTML',
-    )
+    await message.answer(t(lang, 'product_characteristics'), parse_mode='HTML')
     await state.set_state(SearchmanStates.product_characteristics)
 
 
 @router.message(SearchmanStates.product_characteristics)
 async def handle_product_characteristics(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
     await state.update_data(product_characteristics=message.text.strip())
-    await message.answer(
-        '📦 <b>Комплектация товара</b>\n\n'
-        'Что входит в комплект? (например: товар + инструкция + зарядка).\n'
-        '💡 Если нет дополнений — напишите <b>Нету</b>.',
-        parse_mode='HTML',
-    )
+    await message.answer(t(lang, 'product_packaging'), parse_mode='HTML')
     await state.set_state(SearchmanStates.product_packaging)
 
 
 @router.message(SearchmanStates.product_packaging)
 async def handle_product_packaging(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
     await state.update_data(product_packaging=message.text.strip())
-    await message.answer(
-        '📸 <b>Главное фото товара</b>\n\n'
-        'Отправьте одно чёткое главное фото — оно будет обложкой карточки товара.\n'
-        '⚠️ За плохое качество фото предусмотрен штраф.',
-        parse_mode='HTML',
-    )
+    await message.answer(t(lang, 'main_photo'), parse_mode='HTML')
     await state.set_state(SearchmanStates.product_main_image)
 
 
@@ -258,6 +242,8 @@ async def handle_product_packaging(message: Message, state: FSMContext):
 
 @router.message(SearchmanStates.product_main_image, F.photo)
 async def handle_product_main_image(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
     relative_path = await _save_photo(message.bot, message.photo[-1], 'images')
     now = datetime.now(timezone.utc)
 
@@ -274,18 +260,14 @@ async def handle_product_main_image(message: Message, state: FSMContext):
         image_ids=[],
     )
     await state.set_state(SearchmanStates.product_images)
-    await message.answer(
-        '✅ Главное фото сохранено!\n\n'
-        f'📸 <b>Фото товара (альбом)</b>\n\n'
-        f'Отправляйте фотографии по одной — разные ракурсы, детали, этикетка и т.д.\n'
-        f'Максимум {MAX_IMAGES} фото. Когда закончите — нажмите «Готово».',
-        parse_mode='HTML',
-    )
+    await message.answer(t(lang, 'main_photo_saved', max=MAX_IMAGES), parse_mode='HTML')
 
 
 @router.message(SearchmanStates.product_main_image)
-async def handle_main_image_wrong(message: Message):
-    await message.answer('❌ Пожалуйста, отправьте фотографию.')
+async def handle_main_image_wrong(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get('lang', 'ru')
+    await message.answer(t(lang, 'send_photo_please'))
 
 
 # ── Album images ───────────────────────────────────────────────────────────
@@ -293,12 +275,13 @@ async def handle_main_image_wrong(message: Message):
 @router.message(SearchmanStates.product_images, F.photo)
 async def handle_album_photo(message: Message, state: FSMContext):
     data = await state.get_data()
+    lang = data.get('lang', 'ru')
     image_ids: list = data.get('image_ids', [])
 
     if len(image_ids) >= MAX_IMAGES:
         await message.answer(
-            f'❌ Достигнут максимум {MAX_IMAGES} фото. Нажмите «Готово».',
-            reply_markup=images_done_keyboard(len(image_ids)),
+            t(lang, 'max_reached', max=MAX_IMAGES),
+            reply_markup=images_done_keyboard(len(image_ids), lang=lang),
         )
         return
 
@@ -316,21 +299,22 @@ async def handle_album_photo(message: Message, state: FSMContext):
     count = len(image_ids)
 
     if count >= MAX_IMAGES:
-        await message.answer(f'✅ Фото {count}/{MAX_IMAGES} — максимум достигнут!')
+        await message.answer(t(lang, 'max_reached_final', count=count, max=MAX_IMAGES))
         await _finalize(message, state)
     else:
         remaining = MAX_IMAGES - count
         await message.answer(
-            f'✅ Фото {count}/{MAX_IMAGES} добавлено. Можно ещё {remaining}.',
-            reply_markup=images_done_keyboard(count),
+            t(lang, 'photo_added', count=count, max=MAX_IMAGES, remaining=remaining),
+            reply_markup=images_done_keyboard(count, lang=lang),
         )
 
 
 @router.callback_query(SearchmanStates.product_images, F.data == 'images_done')
 async def cb_images_done(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    lang = data.get('lang', 'ru')
     if not data.get('image_ids'):
-        await callback.answer('❌ Добавьте хотя бы одно фото.', show_alert=True)
+        await callback.answer(t(lang, 'add_at_least_one'), show_alert=True)
         return
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.answer()
@@ -340,10 +324,11 @@ async def cb_images_done(callback: CallbackQuery, state: FSMContext):
 @router.message(SearchmanStates.product_images)
 async def handle_album_wrong(message: Message, state: FSMContext):
     data = await state.get_data()
+    lang = data.get('lang', 'ru')
     count = len(data.get('image_ids', []))
     await message.answer(
-        '❌ Пожалуйста, отправьте фотографию.',
-        reply_markup=images_done_keyboard(count) if count > 0 else None,
+        t(lang, 'send_photo_or_done'),
+        reply_markup=images_done_keyboard(count, lang=lang) if count > 0 else None,
     )
 
 
@@ -351,6 +336,7 @@ async def handle_album_wrong(message: Message, state: FSMContext):
 
 async def _finalize(message: Message, state: FSMContext):
     data = await state.get_data()
+    lang = data.get('lang', 'ru')
     image_ids: list = data['image_ids']
     now = datetime.now(timezone.utc)
 
@@ -360,6 +346,7 @@ async def _finalize(message: Message, state: FSMContext):
             store_id=data['store_id'],
             main_image_id=data['main_image_id'],
             name=data['product_name'],
+            price=data.get('product_price', ''),
             size=data['product_size'],
             color=data['product_color'],
             material=data['product_material'],
@@ -386,9 +373,11 @@ async def _finalize(message: Message, state: FSMContext):
 
     main_file_id = data['main_photo_file_id']
 
+    # Подпись в группу — ВСЕГДА на русском
     caption = (
         f'🆕 <b>Новый товар!</b>\n\n'
         f'📦 <b>Название:</b> {data["product_name"]}\n'
+        f'💰 <b>Цена:</b> {data.get("product_price", "—")}\n'
         f'🏪 <b>Магазин:</b> {store.name}\n'
         f'📐 <b>Размеры:</b> {data["product_size"]}\n'
         f'🎨 <b>Цвет:</b> {data["product_color"]}\n'
@@ -401,9 +390,8 @@ async def _finalize(message: Message, state: FSMContext):
 
     await state.clear()
     await message.answer(
-        f'✅ <b>Товар успешно добавлен!</b>\n'
-        f'📸 Фото товара: {len(image_ids)} шт.',
-        reply_markup=searchman_menu(),
+        t(lang, 'product_added', count=len(image_ids)),
+        reply_markup=searchman_menu(lang),
         parse_mode='HTML',
     )
 

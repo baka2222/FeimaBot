@@ -21,11 +21,17 @@ class Staff(models.Model):
     ROLES = [
         ('ai_creator', 'Специалист по генерации контента'),
         ('searchman', 'Специалист по поиску товаров'),
+        ('uploader', 'Заполнитель админ-панели'),
+    ]
+    LANGS = [
+        ('ru', 'Русский'),
+        ('zh', '中文'),
     ]
 
     phone = models.BigIntegerField(verbose_name='Номер телефона', help_text=HELP_TEXT)
     name = models.CharField(verbose_name='Имя сотрудника', max_length=50)
     role = models.CharField(verbose_name='Роль', choices=ROLES, max_length=50)
+    lang = models.CharField(verbose_name='Язык бота', choices=LANGS, max_length=5, default='ru')
 
     age = models.IntegerField(verbose_name='Возраст (Необязательно)', null=True, blank=True)
     tg_id = models.BigIntegerField(verbose_name='Telegram ID', help_text=HELP_TEXT, null=True, blank=True)
@@ -60,7 +66,16 @@ class Product(models.Model):
     creator = models.ForeignKey(
         Staff,
         verbose_name='Поисковик',
-        on_delete=models.CASCADE
+        on_delete=models.CASCADE,
+        related_name='found_products',
+    )
+    uploader = models.ForeignKey(
+        Staff,
+        verbose_name='Загрузчик в панель',
+        on_delete=models.SET_NULL,
+        related_name='uploaded_products',
+        null=True,
+        blank=True,
     )
     store = models.ForeignKey(
         Store,
@@ -82,18 +97,22 @@ class Product(models.Model):
     )
 
     name = models.CharField(max_length=100, verbose_name='Название товара')
+    price = models.CharField(max_length=255, verbose_name='Цена', blank=True, default='')
     size = models.CharField(max_length=100, verbose_name='Размеры')
     color = models.CharField(max_length=100, verbose_name='Цвета')
     material = models.CharField(max_length=100, verbose_name='Материал')
     characteristics = models.CharField(max_length=100, verbose_name='Характеристики')
     packaging = models.CharField(max_length=100, verbose_name='Комплектация')
 
+    uploaded_at = models.DateTimeField(
+        verbose_name='Загружено в панель', null=True, blank=True
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.name
-    
+
     class Meta:
         verbose_name = 'Товар от поисковика'
         verbose_name_plural = 'Товары от поисковика'
